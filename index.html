@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Accordeur de guitare</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Accordeur">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f4f1ea;--card:#fff;--tx:#1d1b18;--mut:#7a746a;--acc:#c2410c;--ok:#15803d;--bd:#ddd6c8;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141211;--card:#1f1c1a;--tx:#f2ede4;--mut:#9a9387;--acc:#fb923c;--ok:#4ade80;--bd:#34302c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#141211;--card:#1f1c1a;--tx:#f2ede4;--mut:#9a9387;--acc:#fb923c;--ok:#4ade80;--bd:#34302c;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;display:flex;justify-content:center}
+main{width:100%;max-width:440px;padding:20px 16px 32px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.25rem;margin:4px 0 0;text-align:center}
+.modes{display:flex;gap:8px}
+button{font:inherit;color:var(--tx);cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.mode{flex:1;padding:12px;border-radius:12px;border:1.5px solid var(--bd);background:var(--card);font-weight:600}
+.mode.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:20px;padding:22px 16px;text-align:center}
+#note{font-size:5.5rem;font-weight:700;line-height:1;transition:color .15s}
+#hz{color:var(--mut);margin-top:6px;min-height:1.4em}
+.bar{position:relative;height:14px;margin:26px 8px 8px;border-radius:7px;background:linear-gradient(90deg,var(--bd) 0 44%,color-mix(in srgb,var(--ok) 35%,transparent) 44% 56%,var(--bd) 56%)}
+.bar::after{content:"";position:absolute;left:50%;top:-6px;bottom:-6px;width:2px;background:var(--mut);opacity:.6}
+#needle{position:absolute;top:-10px;width:6px;height:34px;margin-left:-3px;border-radius:3px;background:var(--acc);left:50%;transition:left .12s,background .15s}
+.scale{display:flex;justify-content:space-between;color:var(--mut);font-size:.75rem;margin:0 8px}
+#status{margin-top:14px;font-weight:600;min-height:1.5em}
+.ok #note,.ok #status{color:var(--ok)}
+.ok #needle{background:var(--ok)}
+.strings{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.str{padding:12px 0;border-radius:12px;border:1.5px solid var(--bd);background:var(--card);font-weight:700;font-size:1.05rem}
+.str small{display:block;font-weight:400;color:var(--mut);font-size:.7rem}
+.str.hit{border-color:var(--acc);color:var(--acc)}
+.str.lock{background:var(--acc);border-color:var(--acc);color:#fff}
+.str.lock small{color:#fff}
+#start{padding:16px;border-radius:14px;border:0;background:var(--tx);color:var(--bg);font-weight:700;font-size:1.05rem}
+#start.run{background:var(--card);color:var(--tx);border:1.5px solid var(--bd)}
+.hint{color:var(--mut);font-size:.82rem;text-align:center;margin:0}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎸 Accordeur de guitare</h1>
+  <div class="modes">
+    <button class="mode on" data-m="std">Classique</button>
+    <button class="mode" data-m="dropd">Drop D</button>
+    <button class="mode" data-m="dropc">Drop C</button>
+  </div>
+  <div class="card" id="card">
+    <div id="note">–</div>
+    <div id="hz">&nbsp;</div>
+    <div class="bar"><div id="needle"></div></div>
+    <div class="scale"><span>♭ −50</span><span>0</span><span>+50 ♯</span></div>
+    <div id="status">Active le micro puis joue une corde</div>
+  </div>
+  <div class="strings" id="strings"></div>
+  <p class="hint">Mode auto : la corde la plus proche est détectée. Touche une corde pour la verrouiller (re-touche pour libérer).</p>
+  <button id="start">Activer le micro</button>
+</main>
+<script>
+const T={
+  std:[["E2",82.41],["A2",110],["D3",146.83],["G3",196],["B3",246.94],["E4",329.63]],
+  dropd:[["D2",73.42],["A2",110],["D3",146.83],["G3",196],["B3",246.94],["E4",329.63]],
+  dropc:[["C2",65.41],["G2",98],["C3",130.81],["F3",174.61],["A3",220],["D4",293.66]]
+};
+let mode="std",locked=null,running=false,ctx,an,buf,stream,timer,last=0,sm=0,prev=-1;
+const $=id=>document.getElementById(id);
+function buildStrings(){
+  $("strings").innerHTML="";
+  T[mode].forEach(([n],i)=>{
+    const b=document.createElement("button");b.className="str";b.id="s"+i;
+    b.innerHTML=n.replace(/\d/,"")+"<small>"+(6-i)+"</small>";
+    b.onclick=()=>{locked=locked===i?null:i;paint();};
+    $("strings").appendChild(b);
+  });
+  paint();
+}
+function paint(){T[mode].forEach((_,i)=>{$("s"+i).classList.toggle("lock",locked===i)});}
+document.querySelectorAll(".mode").forEach(b=>b.onclick=()=>{
+  mode=b.dataset.m;locked=null;prev=-1;
+  document.querySelectorAll(".mode").forEach(x=>x.classList.toggle("on",x===b));
+  buildStrings();idle();
+});
+function idle(){
+  $("note").textContent="–";$("hz").innerHTML="&nbsp;";$("needle").style.left="50%";
+  $("card").classList.remove("ok");
+  $("status").textContent=running?"Joue une corde…":"Active le micro puis joue une corde";
+  T[mode].forEach((_,i)=>$("s"+i).classList.remove("hit"));
+}
+function detect(){
+  an.getFloatTimeDomainData(buf);
+  let r=0;for(let i=0;i<buf.length;i++)r+=buf[i]*buf[i];
+  if(Math.sqrt(r/buf.length)<0.008)return null;
+  const sr=ctx.sampleRate,W=2048,fs=T[mode].map(x=>x[1]);
+  const tmin=Math.floor(sr/(Math.max(...fs)*1.3));
+  const tmax=Math.min(Math.ceil(sr/(Math.min(...fs)*0.8)),buf.length-W-1);
+  const cm=new Float32Array(tmax+2);let sum=0;
+  for(let t=tmin;t<=tmax;t++){
+    let s=0;for(let j=0;j<W;j++){const x=buf[j]-buf[j+t];s+=x*x;}
+    sum+=s;cm[t]=s*(t-tmin+1)/(sum||1);
+  }
+  let tau=-1;
+  for(let t=tmin+1;t<tmax;t++){
+    if(cm[t]<0.15){while(t+1<tmax&&cm[t+1]<cm[t])t++;tau=t;break;}
+  }
+  if(tau<0)return null;
+  const a=cm[tau-1],b=cm[tau],c=cm[tau+1],d=a-2*b+c;
+  return sr/(tau+(d?0.5*(a-c)/d:0));
+}
+function update(f){
+  const now=performance.now();
+  if(f==null){if(now-last>1200)idle();return;}
+  last=now;
+  const list=T[mode];let idx=locked;
+  if(idx==null){let best=1e9;list.forEach(([,hz],i)=>{const e=Math.abs(Math.log2(f/hz));if(e<best){best=e;idx=i;}});}
+  const cents=1200*Math.log2(f/list[idx][1]);
+  sm=idx===prev?sm*0.6+cents*0.4:cents;prev=idx;
+  const c=Math.max(-50,Math.min(50,sm));
+  $("note").textContent=list[idx][0];
+  $("hz").textContent=f.toFixed(1)+" Hz · cible "+list[idx][1].toFixed(1)+" Hz";
+  $("needle").style.left=(50+c)+"%";
+  const ok=Math.abs(sm)<=5;
+  $("card").classList.toggle("ok",ok);
+  $("status").textContent=ok?"Accordée ✓":(sm<0?"Trop grave — serre la corde":"Trop aiguë — desserre la corde")+" ("+(sm>0?"+":"")+Math.round(sm)+" ¢)";
+  list.forEach((_,i)=>$("s"+i).classList.toggle("hit",i===idx));
+}
+async function start(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    ctx=new(window.AudioContext||window.webkitAudioContext)();await ctx.resume();
+    an=ctx.createAnalyser();an.fftSize=4096;ctx.createMediaStreamSource(stream).connect(an);
+    buf=new Float32Array(an.fftSize);running=true;
+    $("start").textContent="Arrêter le micro";$("start").classList.add("run");
+    idle();timer=setInterval(()=>update(detect()),60);
+  }catch(e){
+    $("status").textContent="Micro inaccessible : autorise-le dans le navigateur (ouvre la page dans un onglet complet).";
+  }
+}
+function stop(){
+  clearInterval(timer);running=false;
+  stream&&stream.getTracks().forEach(t=>t.stop());ctx&&ctx.close();
+  $("start").textContent="Activer le micro";$("start").classList.remove("run");idle();
+}
+$("start").onclick=()=>running?stop():start();
+buildStrings();
+</script>
+</body>
+</html>
